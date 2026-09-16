@@ -1,0 +1,7 @@
+# Local-only working files, never pushed
+Essentials/
+PROJECT.md
+Screenshots/
+*.md
+
+.DS_Store

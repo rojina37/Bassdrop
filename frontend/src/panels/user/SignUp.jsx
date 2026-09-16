@@ -1,11 +1,9 @@
 import React, { useState } from 'react'
-import { Link, Navigate} from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
 
 const brandImage =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuDDLMggrwHf673Icctioo5C_FMFavQhfeRarbQZrCZMKbXOrGmtOpLfGGnrMmszS23KrPsfDIimGSP5bAh7laCd59hXhrzRebuPn-CWMGNWgfZICQ7_pxmgI3zXFyuZYIYroOjthzFy-gHcJh-56YPoBObuNep1_FgmVlwnwxHp1crg3vL4DaZabySrJElg6EHL9p5Xq8z2sqhqhSUhPOi_-14d1_5KUbeaXYwe6rkDfmQSGbXkmICu3S1B8FIP2NNxnlxXvpcs69M'
-
-const googleIcon =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuDkoKO14kCnXfJLwzvhtn6w2GUeyFHWjP7EDjjs8s9fnKzfT0VkDQqX1QLMsdsXbrT0NoOythbvOTu3SrFVCSeO1MW5dZtLvtCopb9YGCn9Ikyt0F9RbCFOd1jEKyG5z0DNEc_8H0yt4N_gkocNfH2It6tnojaIr7VjQtOv9avRzW6MFvONUrse_l4pCtj4zmcywSP7L6cA7v_JhoehNrh8MwhJbI0Ugjwk0YlafK-1lT51uB4oR8qRnrnUnY8gmheW3pNwO36e-6w'
 
 const featureHighlights = [
   {
@@ -21,13 +19,42 @@ const featureHighlights = [
 
 ]
 
-const identityModes = [
-  { id: 'listener', icon: 'headphones', label: 'Listener' },
-]
+const listenerModes = [{ id: 'listener', icon: 'headphones', label: 'Listener' }]
+const adminModes = [{ id: 'admin', icon: 'admin_panel_settings', label: 'Admin' }]
 
 const Signup = () => {
-  const navigate = useNavigate();
-  const [identityMode, setIdentityMode] = useState('listener')
+  const { register, registerAdmin } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const isAdmin = location.pathname.startsWith('/admin')
+  const identityModes = isAdmin ? adminModes : listenerModes
+  const [identityMode, setIdentityMode] = useState(identityModes[0].id)
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setError('')
+    setSubmitting(true)
+    try {
+      if (isAdmin) {
+        const derivedName = email.split('@')[0] || 'Admin'
+        await registerAdmin(derivedName, email, password)
+        navigate('/admin/login', { replace: true })
+      } else {
+        await register(name, email, password)
+        navigate('/login', { replace: true })
+      }
+    } catch (err) {
+      setError(err.message || 'Could not create your account.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <main className="signup-page-shell">
@@ -60,19 +87,17 @@ const Signup = () => {
             ))}
           </div>
         </div>
-
-        <footer className="signup-brand-meta">
-          <span>Obsidian V.1</span>
-          <span>Editorial Audio</span>
-          <span>System 2024</span>
-        </footer>
       </section>
 
       <section className="signup-form-panel" aria-label="Create account">
         <div className="signup-form-card">
           <div className="signup-heading">
-            <h2>Create Account</h2>
-            <p>Join the next evolution of digital curation.</p>
+            <h2>{isAdmin ? 'Create Admin Account' : 'Create Account'}</h2>
+            <p>
+              {isAdmin
+                ? 'Set up an admin account to manage the catalog.'
+                : 'Join the next evolution of digital curation.'}
+            </p>
           </div>
 
           <form className="signup-form" onSubmit={handleSubmit}>
@@ -94,19 +119,36 @@ const Signup = () => {
             </div>
 
             <div className="signup-input-list">
-              <label className="signup-field">
-                <span>Full Name</span>
-                <span className="signup-input-wrap">
-                  <span className="material-symbols-outlined">person</span>
-                  <input id="name" name="name" type="text" placeholder="Elias Thorne" />
-                </span>
-              </label>
+              {!isAdmin && (
+                <label className="signup-field">
+                  <span>Full Name</span>
+                  <span className="signup-input-wrap">
+                    <span className="material-symbols-outlined">person</span>
+                    <input
+                      id="name"
+                      name="name"
+                      type="text"
+                      placeholder="Elias Thorne"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                    />
+                  </span>
+                </label>
+              )}
 
               <label className="signup-field">
                 <span>Email Address</span>
                 <span className="signup-input-wrap">
                   <span className="material-symbols-outlined">alternate_email</span>
-                  <input id="signup-email" name="email" type="email" placeholder="elias@obsidian.sonic" />
+                  <input
+                    id="signup-email"
+                    name="email"
+                    type="email"
+                    autoComplete="off"
+                    placeholder="elias@obsidian.sonic"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
                 </span>
               </label>
 
@@ -114,41 +156,42 @@ const Signup = () => {
                 <span>Secure Password</span>
                 <span className="signup-input-wrap">
                   <span className="material-symbols-outlined">lock</span>
-                  <input id="signup-password" name="password" type="password" placeholder="************" />
+                  <input
+                    id="signup-password"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    className="password-field"
+                    placeholder="************"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword((current) => !current)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <span className="material-symbols-outlined toggle-icon">
+                      {showPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
                 </span>
               </label>
             </div>
 
-            <label className="signup-terms">
-              <input id="terms" name="terms" type="checkbox" />
-              <span>
-                I accept the <strong>BaseDrop Immersion Agreement</strong>
-              </span>
-            </label>
+            {error && <p className="signup-error-message">{error}</p>}
 
-            <button type="submit" className="signup-submit-button">
-              <span>Get Started</span>
+            <button type="submit" className="signup-submit-button" disabled={submitting}>
+              <span>{submitting ? 'Creating account…' : 'Get Started'}</span>
               <span className="material-symbols-outlined">arrow_forward</span>
             </button>
           </form>
 
           <div className="signup-alternate">
-            <div className="signup-divider">
-              <span>Or Continue With</span>
-            </div>
-
-            <div className="signup-social-row">
-              <button type="button" aria-label="Continue with Google">
-                <img src={googleIcon} alt="" />
-              </button>
-              <button type="button" aria-label="Continue with Apple">
-                <span className="material-symbols-outlined">ios</span>
-              </button>
-            </div>
-
             <p>
               Already part of the network?
-              <Link to="/login">Sign In</Link>
+              <Link to={isAdmin ? '/admin/login' : '/login'}>Sign In</Link>
             </p>
           </div>
         </div>

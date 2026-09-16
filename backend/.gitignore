@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.log
+
+# uploaded media
+uploads/
+
+# prisma generated client (regenerated on install)
+prisma/generated/

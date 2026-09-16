@@ -1,0 +1,232 @@
+// BassDrop — data model
+// Core stores from the proposal DFD: user, genre, artist, songs, playlist,
+// group_chat, user_song_recommendation. Join/support tables added where implied
+// by the feature set (playlist contents, chat membership/messages, library).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  playlists       Playlist[]
+  likes           LikedSong[]
+  recentlyPlayed  RecentlyPlayed[]
+  follows         ArtistFollow[]
+  chatMemberships GroupChatMember[]
+  chatMessages    ChatMessage[]
+  recommendations UserSongRecommendation[]
+  resetTokens     PasswordResetToken[]
+
+  @@map("user")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_token")
+}
+
+model Genre {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  songs      Song[]
+  groupChats GroupChat[]
+
+  @@map("genre")
+}
+
+model Artist {
+  id        String   @id @default(cuid())
+  name      String
+  bio       String?  @db.Text
+  imageUrl  String?
+  createdAt DateTime @default(now())
+
+  songs     Song[]
+  followers ArtistFollow[]
+
+  @@map("artist")
+}
+
+model Song {
+  id        String   @id @default(cuid())
+  title     String
+  album     String?
+  duration  Int      @default(0) // seconds
+  audioUrl  String
+  coverUrl  String?
+  lyrics    String?  @db.Text // static, not time-synced — see PROJECT.md limitations
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  artistId String
+  artist   Artist @relation(fields: [artistId], references: [id])
+  genreId  String
+  genre    Genre  @relation(fields: [genreId], references: [id])
+
+  playlistEntries PlaylistSong[]
+  likedBy         LikedSong[]
+  plays           RecentlyPlayed[]
+  sharedInChat    ChatMessage[]
+  recommendedTo   UserSongRecommendation[]
+
+  @@index([artistId])
+  @@index([genreId])
+  @@map("songs")
+}
+
+model Playlist {
+  id        String   @id @default(cuid())
+  name      String
+  isPublic  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  songs PlaylistSong[]
+
+  @@index([userId])
+  @@map("playlist")
+}
+
+// join: songs in a playlist (ordered)
+model PlaylistSong {
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  songId     String
+  song       Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  position   Int      @default(0)
+  addedAt    DateTime @default(now())
+
+  @@id([playlistId, songId])
+  @@index([songId])
+  @@map("playlist_song")
+}
+
+model LikedSong {
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId  String
+  song    Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  likedAt DateTime @default(now())
+
+  @@id([userId, songId])
+  @@index([songId])
+  @@map("liked_song")
+}
+
+model RecentlyPlayed {
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId   String
+  song     Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  playedAt DateTime @default(now())
+
+  @@id([userId, songId])
+  @@index([userId, playedAt])
+  @@map("recently_played")
+}
+
+model ArtistFollow {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artistId   String
+  artist     Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  followedAt DateTime @default(now())
+
+  @@id([userId, artistId])
+  @@index([artistId])
+  @@map("artist_follow")
+}
+
+model GroupChat {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  // chats are organized around a genre (optional)
+  genreId String?
+  genre   Genre?  @relation(fields: [genreId], references: [id])
+
+  members  GroupChatMember[]
+  messages ChatMessage[]
+
+  @@index([genreId])
+  @@map("group_chat")
+}
+
+model GroupChatMember {
+  groupChatId String
+  groupChat   GroupChat @relation(fields: [groupChatId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt    DateTime  @default(now())
+
+  @@id([groupChatId, userId])
+  @@index([userId])
+  @@map("group_chat_member")
+}
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  body        String   @db.Text
+  createdAt   DateTime @default(now())
+
+  groupChatId String
+  groupChat   GroupChat @relation(fields: [groupChatId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // optional shared track
+  sharedSongId String?
+  sharedSong   Song?   @relation(fields: [sharedSongId], references: [id])
+
+  @@index([groupChatId, createdAt])
+  @@index([userId])
+  @@map("chat_message")
+}
+
+model UserSongRecommendation {
+  id        String   @id @default(cuid())
+  score     Float    @default(0)
+  reason    String? // e.g. "same genre as X", "artist you follow"
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId String
+  song   Song   @relation(fields: [songId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, songId])
+  @@index([userId, score])
+  @@map("user_song_recommendation")
+}
