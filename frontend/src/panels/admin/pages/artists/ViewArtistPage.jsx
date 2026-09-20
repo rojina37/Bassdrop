@@ -3,6 +3,7 @@ import { useAuth } from '../../../../context/AuthContext'
 import { apiFetch } from '../../../../lib/api'
 import { mediaUrl } from '../../../../lib/format'
 import Modal from '../../../../components/Modal'
+import ConfirmDeleteModal from '../../../../components/ConfirmDeleteModal'
 import AddArtistForm from './AddArtistForm'
 
 const ViewArtistPage = () => {
@@ -15,6 +16,7 @@ const ViewArtistPage = () => {
   const [editImageFile, setEditImageFile] = useState(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
 
   const load = () => {
     const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''
@@ -152,7 +154,7 @@ const ViewArtistPage = () => {
                     <button type="button" onClick={() => startEdit(artist)} className="admin-table-edit">
                       Edit
                     </button>
-                    <button type="button" onClick={() => remove(artist)} className="admin-table-delete">
+                    <button type="button" onClick={() => setPendingDelete(artist)} className="admin-table-delete">
                       Delete
                     </button>
                   </div>
@@ -168,6 +170,18 @@ const ViewArtistPage = () => {
         <Modal title="Add Artist" description="Add a new artist to the catalog." onClose={() => setShowAdd(false)}>
           <AddArtistForm onSuccess={handleAdded} />
         </Modal>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDeleteModal
+          title="Delete artist?"
+          description={`This will permanently remove "${pendingDelete.name}" (${pendingDelete.songCount} songs). This can't be undone.`}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            remove(pendingDelete)
+            setPendingDelete(null)
+          }}
+        />
       )}
     </>
   )

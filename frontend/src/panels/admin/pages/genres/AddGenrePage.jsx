@@ -3,6 +3,7 @@ import { useAuth } from '../../../../context/AuthContext'
 import { useToast } from '../../../../context/ToastContext'
 import { apiFetch } from '../../../../lib/api'
 import Modal from '../../../../components/Modal'
+import ConfirmDeleteModal from '../../../../components/ConfirmDeleteModal'
 import AddGenreForm from './AddGenreForm'
 
 const AddGenrePage = () => {
@@ -15,6 +16,7 @@ const AddGenrePage = () => {
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
 
   const loadGenres = () => {
     apiFetch('/genres')
@@ -134,7 +136,7 @@ const AddGenrePage = () => {
                         <button type="button" onClick={() => startEdit(genre)} className="admin-table-edit">
                           Edit
                         </button>
-                        <button type="button" onClick={() => remove(genre)} className="admin-table-delete">
+                        <button type="button" onClick={() => setPendingDelete(genre)} className="admin-table-delete">
                           Delete
                         </button>
                       </td>
@@ -152,6 +154,18 @@ const AddGenrePage = () => {
         <Modal title="Add Genre" description="Create a new genre for the catalog." onClose={() => setShowAdd(false)}>
           <AddGenreForm onSuccess={handleAdded} />
         </Modal>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDeleteModal
+          title="Delete genre?"
+          description={`This will permanently remove "${pendingDelete.name}" (${pendingDelete.songCount} songs). This can't be undone.`}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            remove(pendingDelete)
+            setPendingDelete(null)
+          }}
+        />
       )}
     </>
   )

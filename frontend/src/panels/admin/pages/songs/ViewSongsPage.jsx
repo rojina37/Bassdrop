@@ -3,6 +3,7 @@ import { useAuth } from '../../../../context/AuthContext'
 import { apiFetch } from '../../../../lib/api'
 import { formatDuration, mediaUrl } from '../../../../lib/format'
 import Modal from '../../../../components/Modal'
+import ConfirmDeleteModal from '../../../../components/ConfirmDeleteModal'
 import SongForm from './SongForm'
 
 export const ViewSongsPage = () => {
@@ -12,6 +13,7 @@ export const ViewSongsPage = () => {
   const [error, setError] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [editingSong, setEditingSong] = useState(null)
+  const [pendingDelete, setPendingDelete] = useState(null)
 
   const load = () => {
     const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''
@@ -98,7 +100,7 @@ export const ViewSongsPage = () => {
                     <button type="button" onClick={() => setEditingSong(song)} className="admin-table-edit">
                       Edit
                     </button>
-                    <button type="button" onClick={() => remove(song)} className="admin-table-delete">
+                    <button type="button" onClick={() => setPendingDelete(song)} className="admin-table-delete">
                       Delete
                     </button>
                   </td>
@@ -124,6 +126,18 @@ export const ViewSongsPage = () => {
         >
           <SongForm song={editingSong} onSuccess={handleEdited} />
         </Modal>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDeleteModal
+          title="Delete song?"
+          description={`This will permanently remove "${pendingDelete.title}" and its audio file. This can't be undone.`}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            remove(pendingDelete)
+            setPendingDelete(null)
+          }}
+        />
       )}
     </>
   )

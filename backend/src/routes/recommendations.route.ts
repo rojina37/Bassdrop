@@ -4,25 +4,70 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { HttpError } from "../middleware/error.js";
 import { songInclude, toPublicSong, type SongWithRelations } from "../lib/serializers.js";
+import {
+  addWeighted,
+  cosineSimilarity,
+  inverseDocumentFrequencies,
+  tfidfVector,
+  tokenize,
+  type SparseVector,
+} from "../lib/tfidf.js";
 
 export const recommendationsRouter = Router();
 
-// Content-based filtering (genre/artist scoring) — see PROJECT.md. No ML
-// service: candidates are scored in JS from a small signal set (liked
-// songs, recent plays, followed artists), which is plenty for this catalog's
-// size and keeps the whole thing debuggable.
+// Content-based filtering — see PROJECT.md. No ML service: songs are turned
+// into TF-IDF term vectors (title/album/artist/genre/lyrics) and ranked by
+// cosine similarity against a "taste vector" built from the user's liked
+// songs, recent plays, and followed artists. weightedArtists/weightedGenres
+// below are only for the human-readable "reason" shown in the UI, not for
+// scoring — scoring is entirely the TF-IDF/cosine step.
 type ScoredSong = { song: SongWithRelations; score: number; reason: string };
 
-function rankBySignals(
-  candidates: SongWithRelations[],
+function repeat(tokens: string[], times: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < times; i++) out.push(...tokens);
+  return out;
+}
+
+// Structured metadata (artist/genre/title) is repeated so it isn't drowned
+// out by lyrics length in the raw term-frequency count.
+function songDocument(song: SongWithRelations): string[] {
+  return [
+    ...repeat(tokenize(song.artist.name), 3),
+    ...repeat(tokenize(song.genre.name), 3),
+    ...repeat(tokenize(song.title), 2),
+    ...tokenize(song.album ?? ""),
+    ...tokenize(song.lyrics ?? ""),
+  ];
+}
+
+function buildCatalogIndex(songs: SongWithRelations[]): {
+  idf: Map<string, number>;
+  vectors: Map<string, SparseVector>;
+} {
+  const documents = songs.map((song) => [song.id, songDocument(song)] as const);
+  const idf = inverseDocumentFrequencies(documents.map(([, tokens]) => tokens));
+  const vectors = new Map(documents.map(([id, tokens]) => [id, tfidfVector(tokens, idf)]));
+  return { idf, vectors };
+}
+
+function artistBoostVector(name: string, idf: Map<string, number>): SparseVector {
+  return tfidfVector(repeat(tokenize(name), 3), idf);
+}
+
+function scoreCatalog(
+  songs: SongWithRelations[],
+  profile: SparseVector,
+  vectors: Map<string, SparseVector>,
   weightedArtists: Map<string, { weight: number; reason: string }>,
   weightedGenres: Map<string, { weight: number; reason: string }>,
 ): ScoredSong[] {
-  return candidates
+  return songs
     .map((song) => {
+      const vector = vectors.get(song.id);
+      const score = vector ? cosineSimilarity(profile, vector) : 0;
       const artistMatch = weightedArtists.get(song.artistId);
       const genreMatch = weightedGenres.get(song.genreId);
-      const score = (artistMatch?.weight ?? 0) + (genreMatch?.weight ?? 0);
       const reason = artistMatch?.reason ?? genreMatch?.reason ?? "Popular on BassDrop";
       return { song, score, reason };
     })
@@ -63,7 +108,7 @@ recommendationsRouter.get("/", requireAuth, async (req, res) => {
   const take = z.coerce.number().int().min(1).max(20).default(8).parse(req.query.take);
   const userId = req.user!.id;
 
-  const [likedSongs, recentPlays, follows] = await Promise.all([
+  const [likedSongs, recentPlays, follows, catalog] = await Promise.all([
     prisma.likedSong.findMany({
       where: { userId },
       include: { song: { include: songInclude } },
@@ -76,13 +121,16 @@ recommendationsRouter.get("/", requireAuth, async (req, res) => {
       orderBy: { playedAt: "desc" },
       take: 50,
     }),
-    prisma.artistFollow.findMany({ where: { userId }, select: { artistId: true } }),
+    prisma.artistFollow.findMany({ where: { userId }, include: { artist: { select: { name: true } } } }),
+    prisma.song.findMany({ include: songInclude }),
   ]);
 
   const seenSongIds = new Set([
     ...likedSongs.map((entry) => entry.songId),
     ...recentPlays.map((entry) => entry.songId),
   ]);
+
+  const { idf, vectors } = buildCatalogIndex(catalog);
 
   const weightedArtists = new Map<string, { weight: number; reason: string }>();
   const weightedGenres = new Map<string, { weight: number; reason: string }>();
@@ -108,38 +156,36 @@ recommendationsRouter.get("/", requireAuth, async (req, res) => {
     bump(weightedGenres, entry.song.genreId, 1, `More ${entry.song.genre.name}`);
   }
 
-  let scored: ScoredSong[] = [];
-  if (weightedArtists.size > 0 || weightedGenres.size > 0) {
-    const candidates = await prisma.song.findMany({
-      where: {
-        id: { notIn: [...seenSongIds] },
-        OR: [
-          { artistId: { in: [...weightedArtists.keys()] } },
-          { genreId: { in: [...weightedGenres.keys()] } },
-        ],
-      },
-      include: songInclude,
-      take: 100,
-    });
-    scored = rankBySignals(candidates, weightedArtists, weightedGenres);
+  // Taste vector: TF-IDF vectors of liked/played songs (weighted by how
+  // strong that signal is), plus a direct boost for followed artists' names
+  // so following someone counts even before you've played any of their songs.
+  const profile: SparseVector = new Map();
+  for (const entry of likedSongs) {
+    const vector = vectors.get(entry.songId);
+    if (vector) addWeighted(profile, vector, 3);
   }
+  for (const entry of recentPlays) {
+    const vector = vectors.get(entry.songId);
+    if (vector) addWeighted(profile, vector, 2);
+  }
+  for (const { artist } of follows) addWeighted(profile, artistBoostVector(artist.name, idf), 4);
+
+  const unseen = catalog.filter((song) => !seenSongIds.has(song.id));
+  const scored = scoreCatalog(unseen, profile, vectors, weightedArtists, weightedGenres);
 
   let result = scored.slice(0, take);
 
   // Prefer unseen songs, but a small catalog + an active user can exhaust
   // every unseen song. Rather than fall straight to a flat "newest first"
   // list, re-score the songs they've already liked/played against the same
-  // signals — a maxed-out user still gets a personalized order (e.g. "From
-  // an artist you follow") instead of generic filler.
-  if (result.length < take && (weightedArtists.size > 0 || weightedGenres.size > 0)) {
+  // taste vector — a maxed-out user still gets a personalized order instead
+  // of generic filler.
+  if (result.length < take && profile.size > 0) {
     const have = new Set(result.map((entry) => entry.song.id));
-    const seenIdsToRescore = [...seenSongIds].filter((id) => !have.has(id));
-    if (seenIdsToRescore.length > 0) {
-      const seenCandidates = await prisma.song.findMany({
-        where: { id: { in: seenIdsToRescore } },
-        include: songInclude,
-      });
-      const rescored = rankBySignals(seenCandidates, weightedArtists, weightedGenres);
+    const seenIdsToRescore = new Set([...seenSongIds].filter((id) => !have.has(id)));
+    if (seenIdsToRescore.size > 0) {
+      const seenCandidates = catalog.filter((song) => seenIdsToRescore.has(song.id));
+      const rescored = scoreCatalog(seenCandidates, profile, vectors, weightedArtists, weightedGenres);
       result = [...result, ...rescored].slice(0, take);
     }
   }
@@ -164,30 +210,27 @@ recommendationsRouter.get("/", requireAuth, async (req, res) => {
 });
 
 // GET /api/recommendations/song/:songId — "Recommended for you" on the Now
-// Playing page: songs related to whatever's currently playing (same artist
-// weighted above same genre), not tied to a logged-in user.
+// Playing page: songs whose TF-IDF vector is closest by cosine similarity to
+// the currently playing song, not tied to a logged-in user.
 recommendationsRouter.get("/song/:songId", async (req, res) => {
   const take = z.coerce.number().int().min(1).max(20).default(8).parse(req.query.take);
   const songId = req.params.songId as string;
 
-  const song = await prisma.song.findUnique({ where: { id: songId }, include: songInclude });
+  const catalog = await prisma.song.findMany({ include: songInclude });
+  const song = catalog.find((entry) => entry.id === songId);
   if (!song) throw new HttpError(404, "Song not found");
 
+  const { vectors } = buildCatalogIndex(catalog);
+  const songVector = vectors.get(song.id) ?? new Map();
+
+  // Kept only for the "reason" text — same artist/genre naturally scores
+  // highest via cosine similarity anyway, since songDocument() repeats
+  // artist/genre names into the term vector.
   const weightedArtists = new Map([[song.artistId, { weight: 3, reason: `Because you're playing ${song.title}` }]]);
   const weightedGenres = new Map([[song.genreId, { weight: 1, reason: `More ${song.genre.name}` }]]);
 
-  // Score the whole catalog rather than pre-filtering to same-artist/genre
-  // matches: same artist (weight 3) and same genre (weight 1) naturally
-  // sort to the top, but a small or sparse catalog with no direct match
-  // still falls back to the rest of the catalog by recency instead of a
-  // blanket "New on BassDrop" filler for every slot.
-  const candidates = await prisma.song.findMany({
-    where: { id: { not: song.id } },
-    include: songInclude,
-    take: 100,
-  });
-
-  const scored = rankBySignals(candidates, weightedArtists, weightedGenres);
+  const candidates = catalog.filter((entry) => entry.id !== song.id);
+  const scored = scoreCatalog(candidates, songVector, vectors, weightedArtists, weightedGenres);
   const result = await padWithNewest(scored, new Set([song.id]), take);
 
   res.json({ songs: result.map(({ song: s, reason }) => ({ ...toPublicSong(s), reason })) });

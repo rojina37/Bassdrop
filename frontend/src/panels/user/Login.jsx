@@ -6,7 +6,7 @@ const backgroundImage =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuDnoWq3MmMQKocVHS4Q-6SBeUglaRT2omu7hBaTWtp102oCr1Hcc2GfputgzvjQPUlyZ8UBF-bhL15gMALPlD8JRbI7xbQjmfF1GBs7hfikGWHnx7xfCKUL3g9AY3y01FxpH-hE_FlJe9396VHJSTZUVU3ZeK_V2rV4OxcE7gmFzgJ86Nnn6eCaSot4erf-z0AUvno9t98U9XNkHAI83EfSvZohZrTCq-CgqP-mmQa6apf8KuDy90G111-IxP3ii7bucRPOPnffObY'
 
 const Login = () => {
-  const { login } = useAuth()
+  const { login, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = location.pathname.startsWith('/admin')
@@ -22,7 +22,21 @@ const Login = () => {
     setSubmitting(true)
     try {
       const user = await login(email, password)
-      const fallback = user.role === 'ADMIN' ? '/admin' : '/'
+      const userIsAdmin = user.role === 'ADMIN'
+
+      // The account is valid, but this is the wrong portal for its role —
+      // don't leave it signed in and don't navigate anywhere.
+      if (userIsAdmin !== isAdmin) {
+        logout()
+        setError(
+          isAdmin
+            ? "This account isn't an admin. Log in from the user page instead."
+            : 'This is an admin account. Log in from the admin page instead.',
+        )
+        return
+      }
+
+      const fallback = userIsAdmin ? '/admin' : '/'
       navigate(location.state?.from?.pathname ?? fallback, { replace: true })
     } catch (err) {
       setError(err.message || 'Invalid email or password')

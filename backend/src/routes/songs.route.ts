@@ -86,6 +86,11 @@ songsRouter.post("/", requireAuth, requireAdmin, songUpload, async (req, res) =>
     if (!artist) throw new HttpError(400, "Unknown artistId");
     if (!genre) throw new HttpError(400, "Unknown genreId");
 
+    // MySQL's default collation compares strings case-insensitively, which is
+    // exactly the "August" vs "august" duplicate we want to catch here.
+    const duplicate = await prisma.song.findFirst({ where: { title, artistId } });
+    if (duplicate) throw new HttpError(409, `"${title}" from ${artist.name} already exists`);
+
     const song = await prisma.song.create({
       data: {
         title,
@@ -138,6 +143,16 @@ songsRouter.patch("/:id", requireAuth, requireAdmin, songUpload, async (req, res
     if (data.genreId) {
       const genre = await prisma.genre.findUnique({ where: { id: data.genreId } });
       if (!genre) throw new HttpError(400, "Unknown genreId");
+    }
+
+    if (data.title || data.artistId) {
+      const title = data.title ?? existing.title;
+      const artistId = data.artistId ?? existing.artistId;
+      const duplicate = await prisma.song.findFirst({ where: { title, artistId, id: { not: existing.id } } });
+      if (duplicate) {
+        const artist = await prisma.artist.findUnique({ where: { id: artistId } });
+        throw new HttpError(409, `"${title}" from ${artist?.name ?? "this artist"} already exists`);
+      }
     }
 
     const song = await prisma.song.update({
